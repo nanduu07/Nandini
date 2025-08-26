@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SVG Drawing Tool</title>
+  <style>
+    :root {
+      --bg: #0f1724;
+      --panel: #0b1220;
+      --accent: #06b6d4;
+      --muted: #94a3b8;
+      --card: #0b1220;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+      background: linear-gradient(180deg,#071126 0%, #0c1726 100%);
+      color: #e6eef6;
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+
+    header {
+      grid-column: 1 / -1;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.02);
+      box-shadow: 0 6px 18px rgba(2,6,23,0.6);
+      margin-bottom: 6px;
+    }
+    header h1 {
+      font-size: 18px;
+      margin: 0;
+      letter-spacing: -0.2px;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      background: rgba(255,255,255,0.02);
+      padding: 12px;
+      border-radius: 10px;
+      height: calc(100vh - 72px);
+      overflow: auto;
+    }
+
+    .tool-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .tool {
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.04);
+      background: transparent;
+      text-align: center;
+      cursor: pointer;
+      font-size: 13px;
+      user-select: none;
+    }
+    .tool.active {
+      background: linear-gradient(90deg, rgba(6,182,212,0.12), rgba(96,165,250,0.06));
+      border-color: rgba(6,182,212,0.24);
+      box-shadow: 0 6px 18px rgba(6,182,212,0.06);
+    }
+
+    .controls {
+      margin-top: 12px;
+      display: grid;
+      gap: 12px;
+    }
+    label {
+      font-size: 12px;
+      color: var(--muted);
+      display:block;
+      margin-bottom:6px;
+    }
+    input[type="color"], input[type="range"], select {
+      width:100%;
+    }
+
+    .btn {
+      padding: 8px;
+      border-radius: 8px;
+      border: none;
+      background: rgba(255,255,255,0.03);
+      color: inherit;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn.primary {
+      background: linear-gradient(90deg,#06b6d4,#6366f1);
+      color: #021025;
+      font-weight: 600;
+    }
+    .row {
+      display:flex;
+      gap:8px;
+    }
+
+    /* Canvas area */
+    .canvas-wrap {
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+
+    .toolbar {
+      display:flex;
+      align-items:center;
+      gap:8px;
+      padding: 8px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.02);
+    }
+
+    .stage {
+      border-radius: 10px;
+      background: linear-gradient(180deg,#071021,#051020);
+      padding: 12px;
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    /* Make svg occupy full available space */
+    svg#paint {
+      width: 100%;
+      height: 100%;
+      border-radius: 8px;
+      background: linear-gradient(180deg,#021825,#071e2b);
+      overflow: visible;
+      cursor: crosshair;
+      user-select: none;
+      touch-action: none;
+    }
+
+    /* selected styling */
+    .selected {
+      filter: drop-shadow(0 3px 10px rgba(6,182,212,0.12));
+      stroke-dasharray: 4 4;
+    }
+
+    footer.small {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 8px;
+    }
+
+    /* responsive for narrow screens */
+    @media (max-width: 880px) {
+      body { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>SVG Drawing Tool</h1>
+      <div class="subtitle">Draw shapes, move/select, undo, and export SVG</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button id="exportBtn" class="btn primary">Export SVG</button>
+      <button id="clearBtn" class="btn">Clear All</button>
+    </div>
+  </header>
+
+  <aside class="sidebar" aria-label="Toolbox">
+    <div>
+      <strong>Tools</strong>
+      <div class="tool-grid" style="margin-top:8px;">
+        <div class="tool active" data-tool="select" id="tool-select">Select</div>
+        <div class="tool" data-tool="rect" id="tool-rect">Rect</div>
+        <div class="tool" data-tool="circle" id="tool-circle">Circle</div>
+        <div class="tool" data-tool="line" id="tool-line">Line</div>
+        <div class="tool" data-tool="pen" id="tool-pen">Pen</div>
+        <div class="tool" data-tool="eraser" id="tool-eraser">Eraser</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div>
+        <label for="strokeColor">Stroke color</label>
+        <input type="color" id="strokeColor" value="#06b6d4">
+      </div>
+
+      <div>
+        <label for="fillColor">Fill color</label>
+        <input type="color" id="fillColor" value="#082a33">
+      </div>
+
+      <div>
+        <label for="strokeWidth">Stroke width: <span id="swLabel">2</span></label>
+        <input type="range" id="strokeWidth" min="0" max="12" value="2">
+      </div>
+
+      <div>
+        <label for="lineCap">Line cap</label>
+        <select id="lineCap">
+          <option value="round">round</option>
+          <option value="butt">butt</option>
+          <option value="square">square</option>
+        </select>
+      </div>
+
+      <div>
+        <label>Actions</label>
+        <div class="row">
+          <button id="undoBtn" class="btn">Undo</button>
+          <button id="deleteBtn" class="btn">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;color:var(--muted);font-size:13px;">
+      Shortcuts: Delete — removes selected, Ctrl/Cmd+Z — undo.
+    </div>
+
+  </aside>
+
+  <main class="canvas-wrap">
+    <div class="toolbar">
+      <div class="subtitle">Active tool: <strong id="activeTool">select</strong></div>
+      <div style="flex:1"></div>
+      <div class="subtitle">Tip: draw with mouse or touch</div>
+    </div>
+
+    <div class="stage" id="stage">
+      <svg id="paint" viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Drawing canvas">
+        <!-- background rect to ensure clicks in empty space register -->
+        <rect width="100%" height="100%" fill="transparent"></rect>
+      </svg>
+    </div>
+
+    <footer class="small">
+      Built with SVG • Click a tool, then draw on the canvas. Use Select to move shapes.
+    </footer>
+  </main>
+
+  <script>
+    (function () {
+      // ---------- helpers ----------
+      const $ = s => document.querySelector(s);
+      const $$ = s => Array.from(document.querySelectorAll(s));
+
+      // Transform client coords -> SVG coords
+      function clientToSvg(svg, clientX, clientY) {
+        const pt = svg.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+        const ctm = svg.getScreenCTM();
+        if (!ctm) return { x: clientX, y: clientY };
+        const inv = ctm.inverse();
+        const transformed = pt.matrixTransform(inv);
+        return { x: transformed.x, y: transformed.y };
+      }
+
+      // ---------- app state ----------
+      const svg = $('#paint');
+      const tools = $$('.tool');
+      const activeToolLabel = $('#activeTool');
+      let activeTool = 'select';
+      let isDrawing = false;
+      let current = null;
+      let startPoint = null;
+      let currentPathPoints = []; // for pen
+      let selectedElement = null;
+      const undoStack = [];
+
+      // controls
+      const strokeColorEl = $('#strokeColor');
+      const fillColorEl = $('#fillColor');
+      const strokeWidthEl = $('#strokeWidth');
+      const swLabel = $('#swLabel');
+      const lineCapEl = $('#lineCap');
+      const undoBtn = $('#undoBtn');
+      const deleteBtn = $('#deleteBtn');
+      const exportBtn = $('#exportBtn');
+      const clearBtn = $('#clearBtn');
+
+      // set initial attributes used for newly created shapes
+      function defaultAttrs() {
+        return {
+          stroke: strokeColorEl.value,
+          'stroke-width': strokeWidthEl.value,
+          fill: (activeTool === 'line' || activeTool === 'pen' || activeTool === 'eraser') ? 'none' : fillColorEl.value,
+          'stroke-linecap': lineCapEl.value,
+          'stroke-linejoin': 'round',
+          'vector-effect': 'non-scaling-stroke'
+        };
+      }
+
+      // ---------- UI wiring ----------
+      tools.forEach(t => t.addEventListener('click', e => {
+        tools.forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+        activeTool = t.dataset.tool;
+        activeToolLabel.textContent = activeTool;
+        // change cursor for select vs draw
+        svg.style.cursor = activeTool === 'select' ? 'default' : 'crosshair';
+        // deselect on tool change
+        deselectElement();
+      }));
+
+      strokeWidthEl.addEventListener('input', () => {
+        swLabel.textContent = strokeWidthEl.value;
+      });
+
+      // Undo
+      undoBtn.addEventListener('click', undo);
+
+      // Delete selected
+      deleteBtn.addEventListener('click', () => {
+        if (selectedElement) {
+          pushUndo({ type: 'remove', element: selectedElement, index: getIndexOf(selectedElement) });
+          selectedElement.remove();
+          selectedElement = null;
+        }
+      });
+
+      // Clear all
+      clearBtn.addEventListener('click', () => {
+        const children = Array.from(svg.children).filter(ch => ch.tagName !== 'rect'); // keep background rect
+        if (children.length === 0) return;
+        pushUndo({ type: 'clear', elements: children });
+        children.forEach(ch => ch.remove());
+        deselectElement();
+      });
+
+      // Export
+      exportBtn.addEventListener('click', () => {
+        // serialize the SVG and download it
+        const clone = svg.cloneNode(true);
+        // remove selection styling from exported clone
+        clone.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+        clone.removeAttribute('style'); // remove inline width/height
+        const serializer = new XMLSerializer();
+        const str = serializer.serializeToString(clone);
+        const blob = new Blob([str], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'drawing.svg';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+
+      // keyboard shortcuts: Del to delete selected, Ctrl/Cmd+Z to undo
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          if (selectedElement) {
+            pushUndo({ type: 'remove', element: selectedElement, index: getIndexOf(selectedElement) });
+            selectedElement.remove();
+            selectedElement = null;
+          }
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+          e.preventDefault();
+          undo();
+        }
+      });
+
+      // ---------- undo management ----------
+      function pushUndo(action) {
+        undoStack.push(action);
+        // keep stack reasonable
+        if (undoStack.length > 200) undoStack.shift();
+      }
+
+      function undo() {
+        const action = undoStack.pop();
+        if (!action) return;
+        if (action.type === 'create') {
+          if (action.element && action.element.parentNode) action.element.remove();
+        } else if (action.type === 'remove') {
+          // reinsert at original index if possible
+          const parent = svg;
+          const ref = parent.children[action.index] || null;
+          parent.insertBefore(action.element, ref);
+        } else if (action.type === 'clear') {
+          const parent = svg;
+          action.elements.forEach((el) => parent.appendChild(el));
+        } else if (action.type === 'attr-change') {
+          // revert attributes
+          for (const [k, v] of Object.entries(action.prevAttrs)) {
+            if (v === null) {
+              action.element.removeAttribute(k);
+            } else {
+              action.element.setAttribute(k, v);
+            }
+          }
+        }
+      }
+
+      function getIndexOf(el) {
+        // return numeric index relative to svg children
+        return Array.prototype.indexOf.call(svg.children, el);
+      }
+
+      // ---------- selection handling ----------
+      function selectElement(el) {
+        if (!el || el === svg || el.tagName === 'rect') return;
+        deselectElement();
+        selectedElement = el;
+        selectedElement.classList.add('selected');
+        // set pointer cursor to indicate draggable
+        selectedElement.style.cursor = 'grab';
+      }
+      function deselectElement() {
+        if (selectedElement) {
+          selectedElement.classList.remove('selected');
+          selectedElement.style.cursor = '';
+        }
+        selectedElement = null;
+      }
+
+      // allow clicking shapes to select when in select tool
+      svg.addEventListener('pointerdown', (ev) => {
+        // prefer shapes to background: if pointerTargets a child shape, we'll get it via ev.target
+        // but since there's a background rect, ev.target will always be a node
+        const target = ev.target;
+        if (activeTool === 'select') {
+          if (target === svg || target.tagName === 'rect') {
+            // clicked empty space: deselect
+            deselectElement();
+            return;
+          }
+          // otherwise select the clicked element (ignore background rect)
+          selectElement(target);
+        }
+      });
+
+      // ---------- drawing logic ----------
+      // handle pointer events at top-level svg
+      svg.addEventListener('pointerdown', onPointerDown);
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+
+      // state for dragging selected element
+      let dragInfo = null;
+
+      function onPointerDown(e) {
+        // if right click or non-primary button, ignore
+        if (e.button !== 0) return;
+        // don't start drawing if we clicked a toolbar/control element (the svg contains controls? not here)
+        const svgPt = clientToSvg(svg, e.clientX, e.clientY);
+        if (activeTool === 'select') {
+          // if clicked an element, prepare for drag
+          const tgt = e.target;
+          if (tgt && tgt !== svg && tgt.tagName !== 'rect') {
+            selectElement(tgt);
+            // prepare drag
+            dragInfo = {
+              el: tgt,
+              startClient: { x: e.clientX, y: e.clientY },
+              startSvg: svgPt,
+              initialAttrs: extractPositionAttrs(tgt)
+            };
+            // capture pointer for element so we can drag even if pointer leaves
+            try { (tgt).setPointerCapture?.(e.pointerId); } catch (err) {}
+          } else {
+            deselectElement();
+          }
+          return;
+        }
+
+        if (activeTool === 'eraser') {
+          // pick topmost element under pointer and remove it
+          const picked = document.elementFromPoint(e.clientX, e.clientY);
+          if (picked && picked !== svg && picked.tagName !== 'rect') {
+            pushUndo({ type: 'remove', element: picked, index: getIndexOf(picked) });
+            picked.remove();
+          }
+          return;
+        }
+
+        // For drawing tools: start new shape
+        isDrawing = true;
+        startPoint = svgPt;
+
+        const attrs = defaultAttrs();
+
+        if (activeTool === 'rect') {
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', startPoint.x);
+          rect.setAttribute('y', startPoint.y);
+          rect.setAttribute('width', 0);
+          rect.setAttribute('height', 0);
+          applyAttrs(rect, attrs);
+          svg.appendChild(rect);
+          current = rect;
+          pushUndo({ type: 'create', element: rect });
+          // capture pointer
+          try { svg.setPointerCapture?.(e.pointerId); } catch (err) {}
+        } else if (activeTool === 'circle') {
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', startPoint.x);
+          circle.setAttribute('cy', startPoint.y);
+          circle.setAttribute('r', 0);
+          applyAttrs(circle, attrs);
+          svg.appendChild(circle);
+          current = circle;
+          pushUndo({ type: 'create', element: circle });
+          try { svg.setPointerCapture?.(e.pointerId); } catch (err) {}
+        } else if (activeTool === 'line') {
+          const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          ln.setAttribute('x1', startPoint.x);
+          ln.setAttribute('y1', startPoint.y);
+          ln.setAttribute('x2', startPoint.x);
+          ln.setAttribute('y2', startPoint.y);
+          applyAttrs(ln, attrs);
+          svg.appendChild(ln);
+          current = ln;
+          pushUndo({ type: 'create', element: ln });
+          try { svg.setPointerCapture?.(e.pointerId); } catch (err) {}
+        } else if (activeTool === 'pen') {
+          // start a polyline
+          currentPathPoints = [startPoint];
+          const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+          poly.setAttribute('points', ${startPoint.x},${startPoint.y});
+          // pen typically has no fill
+          attrs.fill = 'none';
+          applyAttrs(poly, attrs);
+          svg.appendChild(poly);
+          current = poly;
+          pushUndo({ type: 'create', element: poly });
+          try { svg.setPointerCapture?.(e.pointerId); } catch (err) {}
+        }
+      }
+
+      function onPointerMove(e) {
+        if (dragInfo) {
+          // moving a selected element
+          const pt = clientToSvg(svg, e.clientX, e.clientY);
+          const dx = pt.x - dragInfo.startSvg.x;
+          const dy = pt.y - dragInfo.startSvg.y;
+          moveElementTo(dragInfo.el, dragInfo.initialAttrs, dx, dy);
+          return;
+        }
+
+        if (!isDrawing || !current) return;
+        const pt = clientToSvg(svg, e.clientX, e.clientY);
+
+        if (activeTool === 'rect') {
+          const x = Math.min(startPoint.x, pt.x);
+          const y = Math.min(startPoint.y, pt.y);
+          const w = Math.abs(pt.x - startPoint.x);
+          const h = Math.abs(pt.y - startPoint.y);
+          current.setAttribute('x', x);
+          current.setAttribute('y', y);
+          current.setAttribute('width', w);
+          current.setAttribute('height', h);
+        } else if (activeTool === 'circle') {
+          const dx = pt.x - startPoint.x;
+          const dy = pt.y - startPoint.y;
+          const r = Math.sqrt(dx * dx + dy * dy);
+          current.setAttribute('r', r);
+        } else if (activeTool === 'line') {
+          current.setAttribute('x2', pt.x);
+          current.setAttribute('y2', pt.y);
+        } else if (activeTool === 'pen') {
+          currentPathPoints.push(pt);
+          const pts = currentPathPoints.map(p => ${p.x},${p.y}).join(' ');
+          current.setAttribute('points', pts);
+        }
+      }
+
+      function onPointerUp(e) {
+        // release pointer captures
+        try { svg.releasePointerCapture?.(e.pointerId); } catch (err) {}
+        if (dragInfo && dragInfo.el) {
+          // capture move as attribute-change so it can be undone
+          const prev = dragInfo.initialAttrs;
+          const now = extractPositionAttrs(dragInfo.el);
+          pushUndo({ type: 'attr-change', element: dragInfo.el, prevAttrs: prev, newAttrs: now });
+        }
+        dragInfo = null;
+
+        if (!isDrawing) return;
+        // finalize the current shape: if shape has zero size, remove it
+        if (current) {
+          if (isZeroSized(current)) {
+            // remove from DOM and undo stack if necessary
+            const idx = getIndexOf(current);
+            if (idx >= 0) {
+              // remove the 'create' action previously pushed
+              // naive: remove last create matching this element
+              for (let i = undoStack.length - 1; i >= 0; i--) {
+                if (undoStack[i].type === 'create' && undoStack[i].element === current) {
+                  undoStack.splice(i, 1);
+                  break;
+                }
+              }
+            }
+            current.remove();
+          } else {
+            // apply final attributes (ensure fill/ stroke reflect controls)
+            applyAttrs(current, defaultAttrs());
+          }
+        }
+
+        isDrawing = false;
+        current = null;
+        currentPathPoints = [];
+        startPoint = null;
+      }
+
+      // ---------- element helpers ----------
+      function applyAttrs(el, attrs) {
+        Object.entries(attrs).forEach(([k, v]) => {
+          if (v === null || v === undefined) el.removeAttribute(k);
+          else el.setAttribute(k, v);
+        });
+      }
+
+      function extractPositionAttrs(el) {
+        // return minimal set of position related attributes for undo/redo
+        if (!el) return {};
+        const tag = el.tagName;
+        if (tag === 'rect') {
+          return {
+            x: el.getAttribute('x'),
+            y: el.getAttribute('y'),
+            width: el.getAttribute('width'),
+            height: el.getAttribute('height'),
+            transform: el.getAttribute('transform')
+          };
+        } else if (tag === 'circle') {
+          return {
+            cx: el.getAttribute('cx'),
+            cy: el.getAttribute('cy'),
+            r: el.getAttribute('r'),
+            transform: el.getAttribute('transform')
+          };
+        } else if (tag === 'line') {
+          return {
+            x1: el.getAttribute('x1'),
+            y1: el.getAttribute('y1'),
+            x2: el.getAttribute('x2'),
+            y2: el.getAttribute('y2'),
+            transform: el.getAttribute('transform')
+          };
+        } else if (tag === 'polyline' || tag === 'path') {
+          return {
+            points: el.getAttribute('points'),
+            transform: el.getAttribute('transform')
+          };
+        } else {
+          return { transform: el.getAttribute('transform') };
+        }
+      }
+
+      function moveElementTo(el, startAttrs, dx, dy) {
+        // move depending on element type by offsetting coordinates
+        const tag = el.tagName;
+        if (tag === 'rect') {
+          const nx = parseFloat(startAttrs.x || 0) + dx;
+          const ny = parseFloat(startAttrs.y || 0) + dy;
+          el.setAttribute('x', nx);
+          el.setAttribute('y', ny);
+        } else if (tag === 'circle') {
+          const ncx = parseFloat(startAttrs.cx || 0) + dx;
+          const ncy = parseFloat(startAttrs.cy || 0) + dy;
+          el.setAttribute('cx', ncx);
+          el.setAttribute('cy', ncy);
+        } else if (tag === 'line') {
+          el.setAttribute('x1', parseFloat(startAttrs.x1 || 0) + dx);
+          el.setAttribute('y1', parseFloat(startAttrs.y1 || 0) + dy);
+          el.setAttribute('x2', parseFloat(startAttrs.x2 || 0) + dx);
+          el.setAttribute('y2', parseFloat(startAttrs.y2 || 0) + dy);
+        } else if (tag === 'polyline') {
+          // shift all points
+          const pts = (startAttrs.points || '').trim().split(/\s+/).map(pair => {
+            const [px, py] = pair.split(',');
+            const nx = parseFloat(px || 0) + dx;
+            const ny = parseFloat(py || 0) + dy;
+            return ${nx},${ny};
+          }).join(' ');
+          el.setAttribute('points', pts);
+        } else {
+          // as fallback, apply translate transform
+          el.setAttribute('transform', translate(${dx},${dy}));
+        }
+      }
+
+      function isZeroSized(el) {
+        const tag = el.tagName;
+        if (tag === 'rect') {
+          return (parseFloat(el.getAttribute('width') || 0) === 0) && (parseFloat(el.getAttribute('height') || 0) === 0);
+        } else if (tag === 'circle') {
+          return (parseFloat(el.getAttribute('r') || 0) === 0);
+        } else if (tag === 'line') {
+          return (parseFloat(el.getAttribute('x1') || 0) === parseFloat(el.getAttribute('x2') || 0))
+              && (parseFloat(el.getAttribute('y1') || 0) === parseFloat(el.getAttribute('y2') || 0));
+        } else if (tag === 'polyline') {
+          return !(el.getAttribute('points') || '').trim();
+        }
+        return false;
+      }
+
+      // deselect when clicking outside shapes in the svg background rect
+      svg.querySelector('rect').addEventListener('pointerdown', (e) => {
+        if (activeTool === 'select') {
+          deselectElement();
+        }
+      });
+
+      // When clicking a shape while in a drawing tool, allow selecting it (click to pick) only if user releases quickly.
+      // (This keeps drawing behavior consistent.)
+
+      // Update attributes live from controls for newly created shapes:
+      function updateActiveAttributesOnExistingSelection() {
+        if (!selectedElement) return;
+        const prev = {};
+        // store prev attrs
+        ['stroke','stroke-width','fill','stroke-linecap'].forEach(k => prev[k] = selectedElement.getAttribute(k));
+        const attrs = defaultAttrs();
+        applyAttrs(selectedElement, attrs);
+        pushUndo({ type: 'attr-change', element: selectedElement, prevAttrs: prev });
+      }
+
+      // apply control changes to selected element
+      strokeColorEl.addEventListener('input', updateActiveAttributesOnExistingSelection);
+      fillColorEl.addEventListener('input', updateActiveAttributesOnExistingSelection);
+      strokeWidthEl.addEventListener('input', updateActiveAttributesOnExistingSelection);
+      lineCapEl.addEventListener('change', updateActiveAttributesOnExistingSelection);
+
+      // utility: add small hit feedback when hovering shapes
+      svg.addEventListener('pointerover', (e) => {
+        const t = e.target;
+        if (t && t !== svg && t.tagName !== 'rect') {
+          t.style.opacity = 0.95;
+        }
+      });
+      svg.addEventListener('pointerout', (e) => {
+        const t = e.target;
+        if (t && t !== svg && t.tagName !== 'rect') {
+          t.style.opacity = '';
+        }
+      });
+
+      // small accessibility: focus outline for tools
+      tools.forEach(t => t.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') t.click();
+      }));
+
+      // prevent touch scrolling when drawing inside svg
+      svg.addEventListener('touchmove', (e) => {
+        if (isDrawing) e.preventDefault();
+      }, { passive: false });
+
+      // initialize stroke width label
+      swLabel.textContent = strokeWidthEl.value;
+
+      // finished
+    })();
+  </script>
+</body>
+</html>
