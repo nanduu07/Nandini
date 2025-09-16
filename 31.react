@@ -1,0 +1,29 @@
+import React from "react";
+
+const ProductCard = ({ name, price, inStock }) => {
+  return (
+    <div className="max-w-sm p-4 border rounded-2xl shadow-md bg-white">
+      <h2 className="text-xl font-bold mb-2">{name}</h2>
+      <p className="text-gray-700 mb-1">Price: ₹{price}</p>
+      <p
+        className={`font-semibold ${
+          inStock ? "text-green-600" : "text-red-600"
+        }`}
+      >
+        {inStock ? "In Stock" : "Out of Stock"}
+      </p>
+    </div>
+  );
+};
+
+const App = () => {
+  return (
+    <div className="p-6 grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3">
+      <ProductCard name="Laptop" price={55000} inStock={true} />
+      <ProductCard name="Smartphone" price={25000} inStock={false} />
+      <ProductCard name="Headphones" price={2000} inStock={true} />
+    </div>
+  );
+};
+
+export default App;
