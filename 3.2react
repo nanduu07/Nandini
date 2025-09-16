@@ -1,0 +1,97 @@
+import { useState } from "react";
+
+export default function LibraryManagement() {
+  const [books, setBooks] = useState([
+    { id: 1, title: "The Great Gatsby", author: "F. Scott Fitzgerald" },
+    { id: 2, title: "To Kill a Mockingbird", author: "Harper Lee" },
+    { id: 3, title: "1984", author: "George Orwell" }
+  ]);
+
+  const [search, setSearch] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const [newAuthor, setNewAuthor] = useState("");
+
+  const filteredBooks = books.filter(
+    (book) =>
+      book.title.toLowerCase().includes(search.toLowerCase()) ||
+      book.author.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleAddBook = (e) => {
+    e.preventDefault();
+    if (!newTitle.trim() || !newAuthor.trim()) return;
+    const newBook = {
+      id: Date.now(),
+      title: newTitle,
+      author: newAuthor,
+    };
+    setBooks([...books, newBook]);
+    setNewTitle("");
+    setNewAuthor("");
+  };
+
+  const handleRemoveBook = (id) => {
+    setBooks(books.filter((book) => book.id !== id));
+  };
+
+  return (
+    <div className="p-6 max-w-xl mx-auto space-y-6">
+      <h1 className="text-2xl font-bold text-center">Library Management</h1>
+
+      <input
+        type="text"
+        placeholder="Search by title or author..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="w-full p-2 border rounded-lg"
+      />
+
+      <ul className="space-y-3">
+        {filteredBooks.length > 0 ? (
+          filteredBooks.map((book) => (
+            <li
+              key={book.id}
+              className="flex justify-between items-center p-3 bg-gray-100 rounded-lg"
+            >
+              <div>
+                <p className="font-semibold">{book.title}</p>
+                <p className="text-sm text-gray-600">{book.author}</p>
+              </div>
+              <button
+                onClick={() => handleRemoveBook(book.id)}
+                className="px-3 py-1 bg-red-500 text-white rounded-lg"
+              >
+                Remove
+              </button>
+            </li>
+          ))
+        ) : (
+          <p className="text-center text-gray-500">No books found</p>
+        )}
+      </ul>
+
+      <form onSubmit={handleAddBook} className="space-y-3">
+        <input
+          type="text"
+          placeholder="Book Title"
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          className="w-full p-2 border rounded-lg"
+        />
+        <input
+          type="text"
+          placeholder="Author Name"
+          value={newAuthor}
+          onChange={(e) => setNewAuthor(e.target.value)}
+          className="w-full p-2 border rounded-lg"
+        />
+        <button
+          type="submit"
+          className="w-full p-2 bg-blue-500 text-white rounded-lg"
+        >
+          Add Book
+        </button>
+      </form>
+    </div>
+  );
+}
