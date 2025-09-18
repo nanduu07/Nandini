@@ -1,0 +1,84 @@
+-- ==========================================
+-- Setup: Create table
+-- ==========================================
+DROP TABLE IF EXISTS StudentEnrollments;
+
+CREATE TABLE StudentEnrollments (
+    enrollment_id INT PRIMARY KEY AUTO_INCREMENT,
+    student_name VARCHAR(100) NOT NULL,
+    course_id VARCHAR(10) NOT NULL,
+    enrollment_date DATE NOT NULL,
+    CONSTRAINT unique_enrollment UNIQUE (student_name, course_id)  -- Prevent duplicates
+);
+
+-- ==========================================
+-- Part A: Prevent Duplicate Enrollments
+-- ==========================================
+
+-- User A tries to insert Ashish into CSE101
+START TRANSACTION;
+INSERT INTO StudentEnrollments (student_name, course_id, enrollment_date)
+VALUES ('Ashish', 'CSE101', '2024-07-01');
+COMMIT;
+
+-- User B (simultaneously) tries same insert
+START TRANSACTION;
+INSERT INTO StudentEnrollments (student_name, course_id, enrollment_date)
+VALUES ('Ashish', 'CSE101', '2024-07-01');
+-- ❌ This will fail with a unique constraint violation
+COMMIT;
+
+
+-- ==========================================
+-- Part B: SELECT FOR UPDATE (Row Locking)
+-- ==========================================
+
+-- User A locks Ashish’s enrollment record
+START TRANSACTION;
+SELECT * FROM StudentEnrollments
+WHERE student_name = 'Ashish' AND course_id = 'CSE101'
+FOR UPDATE;
+
+-- (Row is now locked until commit/rollback)
+
+-- User B (at same time) tries to update -> BLOCKED until User A finishes
+START TRANSACTION;
+UPDATE StudentEnrollments
+SET enrollment_date = '2024-08-01'
+WHERE student_name = 'Ashish' AND course_id = 'CSE101';
+-- This will wait until User A commits/rolls back
+COMMIT;
+
+
+-- ==========================================
+-- Part C: Consistency with Locking
+-- ==========================================
+
+-- Suppose initial row:
+-- enrollment_id | student_name | course_id | enrollment_date
+--        1      | Ashish       | CSE101    | 2024-07-01
+
+-- User A tries to update salary/date at the same time as User B
+
+-- User A
+START TRANSACTION;
+SELECT * FROM StudentEnrollments
+WHERE student_name = 'Ashish' AND course_id = 'CSE101'
+FOR UPDATE;  -- lock row
+UPDATE StudentEnrollments
+SET enrollment_date = '2024-09-01'
+WHERE student_name = 'Ashish' AND course_id = 'CSE101';
+COMMIT;
+
+-- User B (started at same time)
+START TRANSACTION;
+SELECT * FROM StudentEnrollments
+WHERE student_name = 'Ashish' AND course_id = 'CSE101'
+FOR UPDATE; -- waits until User A finishes
+UPDATE StudentEnrollments
+SET enrollment_date = '2024-10-01'
+WHERE student_name = 'Ashish' AND course_id = 'CSE101';
+COMMIT;
+
+-- ✅ Final state: enrollment_date = 2024-10-01
+-- No race condition or partial updates, last committed transaction wins.
