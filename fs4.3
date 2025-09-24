@@ -1,0 +1,45 @@
+const express = require('express');
+const app = express();
+const port = 3000;
+
+app.use(express.json());
+
+let seats = Array.from({ length: 10 }, (_, i) => ({
+  id: i + 1,
+  status: 'available',
+  lock: false
+}));
+
+function lockSeat(seat) {
+  if (seat.status !== 'available' || seat.lock) return false;
+  seat.lock = true;
+  return true;
+}
+
+function unlockSeat(seat) {
+  seat.lock = false;
+}
+
+app.get('/seats', (req, res) => {
+  res.json(seats);
+});
+
+app.post('/book/:id', (req, res) => {
+  const seatId = parseInt(req.params.id);
+  const seat = seats.find(s => s.id === seatId);
+
+  if (!seat) return res.status(404).json({ message: 'Seat not found' });
+
+  if (!lockSeat(seat)) return res.status(409).json({ message: 'Seat is being booked or already booked' });
+
+  setTimeout(() => {
+    seat.status = 'booked';
+    unlockSeat(seat);
+  }, 1000);
+
+  res.json({ message: `Booking initiated for seat ${seat.id}` });
+});
+
+app.listen(port, () => {
+  console.log(`Ticket booking API running at http://localhost:${port}`);
+});
