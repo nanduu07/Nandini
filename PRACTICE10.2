@@ -1,0 +1,320 @@
+// Single-file Blog Platform (backend + minimal frontend)
+// Save as `server.js`.
+// Run: npm init -y && npm install express cors jsonwebtoken bcryptjs
+// Then: node server.js
+
+const express = require('express');
+const fs = require('fs').promises;
+const path = require('path');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const cors = require('cors');
+
+const DATA_FILE = path.join(__dirname, 'data.json');
+const PORT = process.env.PORT || 5000;
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
+const TOKEN_EXPIRES = '7d';
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// --- Simple file store ---
+async function readData() {
+  try {
+    const txt = await fs.readFile(DATA_FILE, 'utf8');
+    return JSON.parse(txt || '{}');
+  } catch (err) {
+    if (err.code === 'ENOENT') return { users: [], posts: [], comments: [] };
+    throw err;
+  }
+}
+async function writeData(data) {
+  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+function makeId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+}
+
+// --- Auth helpers ---
+function sign(user) {
+  return jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: TOKEN_EXPIRES });
+}
+async function authMiddleware(req, res, next) {
+  const header = req.headers['authorization'];
+  if (!header) return res.status(401).json({ error: 'No token' });
+  const parts = header.split(' ');
+  if (parts.length !== 2) return res.status(401).json({ error: 'Invalid auth header' });
+  const token = parts[1];
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+}
+
+// --- SSE (simple pub/sub for comments) ---
+const clients = new Set();
+function publishEvent(event, payload) {
+  const data = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const res of clients) {
+    res.write(data);
+  }
+}
+
+app.get('/events', (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  res.write('\n');
+  clients.add(res);
+  req.on('close', () => clients.delete(res));
+});
+
+// --- Auth routes ---
+app.post('/auth/register', async (req, res) => {
+  const { username, password, name, bio } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  const data = await readData();
+  if (data.users.find(u => u.username === username)) return res.status(400).json({ error: 'username taken' });
+  const hash = await bcrypt.hash(password, 10);
+  const user = { id: makeId(), username, passwordHash: hash, name: name || username, bio: bio || '', createdAt: new Date().toISOString() };
+  data.users.push(user);
+  await writeData(data);
+  const token = sign(user);
+  res.json({ token, user: { id: user.id, username: user.username, name: user.name, bio: user.bio } });
+});
+
+app.post('/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  const data = await readData();
+  const user = data.users.find(u => u.username === username);
+  if (!user) return res.status(400).json({ error: 'invalid credentials' });
+  const ok = await bcrypt.compare(password, user.passwordHash);
+  if (!ok) return res.status(400).json({ error: 'invalid credentials' });
+  const token = sign(user);
+  res.json({ token, user: { id: user.id, username: user.username, name: user.name, bio: user.bio } });
+});
+
+app.get('/me', authMiddleware, async (req, res) => {
+  const data = await readData();
+  const user = data.users.find(u => u.id === req.user.id);
+  if (!user) return res.status(404).json({ error: 'not found' });
+  res.json({ id: user.id, username: user.username, name: user.name, bio: user.bio });
+});
+
+// --- User profile ---
+app.get('/users/:id', async (req, res) => {
+  const data = await readData();
+  const user = data.users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error: 'not found' });
+  // expose public profile
+  res.json({ id: user.id, username: user.username, name: user.name, bio: user.bio, createdAt: user.createdAt });
+});
+
+// --- Posts CRUD ---
+app.get('/api/posts', async (req, res) => {
+  const data = await readData();
+  // return posts with author summary and comment counts
+  const posts = data.posts.map(p => ({ ...p, author: shortUser(data.users.find(u => u.id === p.authorId)), commentsCount: data.comments.filter(c => c.postId === p.id).length }));
+  res.json(posts);
+});
+
+app.post('/api/posts', authMiddleware, async (req, res) => {
+  const { title, body } = req.body || {};
+  if (!title || !body) return res.status(400).json({ error: 'title and body required' });
+  const data = await readData();
+  const post = { id: makeId(), title, body, authorId: req.user.id, createdAt: new Date().toISOString(), updatedAt: null };
+  data.posts.unshift(post);
+  await writeData(data);
+  res.status(201).json(post);
+});
+
+app.get('/api/posts/:id', async (req, res) => {
+  const data = await readData();
+  const post = data.posts.find(p => p.id === req.params.id);
+  if (!post) return res.status(404).json({ error: 'not found' });
+  const author = shortUser(data.users.find(u => u.id === post.authorId));
+  const comments = data.comments.filter(c => c.postId === post.id).map(c => ({ ...c, author: shortUser(data.users.find(u => u.id === c.authorId)) }));
+  res.json({ ...post, author, comments });
+});
+
+app.put('/api/posts/:id', authMiddleware, async (req, res) => {
+  const data = await readData();
+  const post = data.posts.find(p => p.id === req.params.id);
+  if (!post) return res.status(404).json({ error: 'not found' });
+  if (post.authorId !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  const { title, body } = req.body || {};
+  if (typeof title === 'string') post.title = title;
+  if (typeof body === 'string') post.body = body;
+  post.updatedAt = new Date().toISOString();
+  await writeData(data);
+  res.json(post);
+});
+
+app.delete('/api/posts/:id', authMiddleware, async (req, res) => {
+  const data = await readData();
+  const idx = data.posts.findIndex(p => p.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'not found' });
+  if (data.posts[idx].authorId !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  data.posts.splice(idx,1);
+  // also remove comments
+  data.comments = data.comments.filter(c => c.postId !== req.params.id);
+  await writeData(data);
+  res.json({ success: true });
+});
+
+// --- Comments ---
+app.post('/api/posts/:id/comments', authMiddleware, async (req, res) => {
+  const data = await readData();
+  const post = data.posts.find(p => p.id === req.params.id);
+  if (!post) return res.status(404).json({ error: 'post not found' });
+  const { text } = req.body || {};
+  if (!text) return res.status(400).json({ error: 'text required' });
+  const comment = { id: makeId(), postId: post.id, authorId: req.user.id, text, createdAt: new Date().toISOString() };
+  data.comments.push(comment);
+  await writeData(data);
+  const out = { ...comment, author: shortUser(data.users.find(u => u.id === comment.authorId)) };
+  publishEvent('comment', out); // SSE to connected clients
+  res.status(201).json(out);
+});
+
+app.delete('/api/comments/:id', authMiddleware, async (req, res) => {
+  const data = await readData();
+  const idx = data.comments.findIndex(c => c.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'not found' });
+  if (data.comments[idx].authorId !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  data.comments.splice(idx,1);
+  await writeData(data);
+  res.json({ success: true });
+});
+
+function shortUser(u) {
+  if (!u) return null;
+  return { id: u.id, username: u.username, name: u.name };
+}
+
+// --- Minimal frontend to demo features ---
+app.get('/', (req, res) => {
+  res.type('html').send(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mini Blog (single file)</title>
+<style>body{font-family:Arial;background:#f3f4f6;padding:20px} .wrap{max-width:900px;margin:0 auto;background:#fff;padding:20px;border-radius:8px} input,textarea{width:100%;padding:8px;margin:6px 0} button{padding:8px 12px} .post{border-bottom:1px solid #eee;padding:12px 0}</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Mini Blog Demo</h1>
+<div id="auth">
+  <h3>Register / Login</h3>
+  <input id="username" placeholder="username" />
+  <input id="password" placeholder="password" type="password" />
+  <input id="name" placeholder="display name (optional)" />
+  <div>
+    <button id="btnRegister">Register</button>
+    <button id="btnLogin">Login</button>
+    <button id="btnMe">Me</button>
+    <span id="status"></span>
+  </div>
+</div>
+<hr/>
+<div id="composer" style="display:none">
+  <h3>Create Post</h3>
+  <input id="postTitle" placeholder="title" />
+  <textarea id="postBody" placeholder="body"></textarea>
+  <button id="btnPost">Publish</button>
+</div>
+<hr/>
+<h3>Posts</h3>
+<div id="posts"></div>
+</div>
+<script>
+let token = localStorage.getItem('token');
+const setStatus = s => document.getElementById('status').textContent = s || '';
+if (token) setStatus('Logged in');
+
+async function api(path, opts={}){
+  opts.headers = opts.headers || {};
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(path, opts);
+  if (res.status === 401){ setStatus('Session expired'); token=null; localStorage.removeItem('token'); document.getElementById('composer').style.display='none'; }
+  const data = await res.json().catch(()=> ({}));
+  if (!res.ok) throw data;
+  return data;
+}
+
+document.getElementById('btnRegister').onclick = async ()=>{
+  try{
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    const name = document.getElementById('name').value;
+    const data = await api('/auth/register', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:u,password:p,name})});
+    token = data.token; localStorage.setItem('token', token); setStatus('Registered & logged in'); document.getElementById('composer').style.display='block';
+  }catch(e){ setStatus(e.error || JSON.stringify(e)); }
+}
+
+document.getElementById('btnLogin').onclick = async ()=>{
+  try{
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    const data = await api('/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:u,password:p})});
+    token = data.token; localStorage.setItem('token', token); setStatus('Logged in'); document.getElementById('composer').style.display='block';
+  }catch(e){ setStatus(e.error || JSON.stringify(e)); }
+}
+
+document.getElementById('btnMe').onclick = async ()=>{
+  try{ const me = await api('/me'); alert('Me: '+JSON.stringify(me)); }catch(e){ setStatus(e.error||JSON.stringify(e)); }
+}
+
+document.getElementById('btnPost').onclick = async ()=>{
+  try{
+    const title = document.getElementById('postTitle').value;
+    const body = document.getElementById('postBody').value;
+    await api('/api/posts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title,body})});
+    document.getElementById('postTitle').value=''; document.getElementById('postBody').value='';
+    loadPosts();
+  }catch(e){ setStatus(e.error||JSON.stringify(e)); }
+}
+
+async function loadPosts(){
+  const posts = await api('/api/posts');
+  const el = document.getElementById('posts'); el.innerHTML='';
+  for (const p of posts){
+    const div = document.createElement('div'); div.className='post';
+    div.innerHTML = `<h4>${escapeHtml(p.title)}</h4><div>by ${p.author?escapeHtml(p.author.name):'Unknown'} • ${p.commentsCount} comments</div><p>${escapeHtml(p.body).slice(0,300)}</p>`;
+    const btn = document.createElement('button'); btn.textContent='View & Comment'; btn.onclick = ()=> openPost(p.id);
+    div.appendChild(btn);
+    el.appendChild(div);
+  }
+}
+
+function escapeHtml(s){ return (s||'').replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function openPost(id){
+  const detail = await api('/api/posts/' + id);
+  const w = window.open('','_blank','width=600,height=700');
+  w.document.write('<html><head><title>'+escapeHtml(detail.title)+'</title></head><body><h2>'+escapeHtml(detail.title)+'</h2><div>by '+escapeHtml(detail.author.name)+'</div><p>'+escapeHtml(detail.body)+'</p><hr><div id="c"></div><form id="cf"><input id="ct" placeholder="comment" style="width:80%"/> <button>Send</button></form><script> const token=localStorage.getItem("token"); async function api(path,opts={}){opts.headers=opts.headers||{}; if(token) opts.headers['Authorization']='Bearer '+token; const r=await fetch(path,opts); return r.json(); } document.getElementById('cf').onsubmit=async (e)=>{e.preventDefault(); const text=document.getElementById('ct').value; await fetch('/api/posts/${id}/comments',{method:'POST',headers:{'Content-Type':'application/json', Authorization: token?('Bearer '+token):''},body:JSON.stringify({text})}); document.getElementById('ct').value=''; loadComments();}; async function loadComments(){ const d=await api('/api/posts/${id}'); const c=document.getElementById('c'); c.innerHTML=''; for(const cm of d.comments){ const el=document.createElement('div'); el.textContent=cm.author.name+': '+cm.text; c.appendChild(el);} } loadComments(); // SSE for realtime
+ var es=new EventSource('/events'); es.addEventListener('comment', function(e){ const d=JSON.parse(e.data); if(d.postId==='${id}'){ const el=document.getElementById('c'); const nd=document.createElement('div'); nd.textContent=d.author.name+': '+d.text; el.appendChild(nd);} }, false);
+</script></body></html>');
+}
+
+loadPosts();
+
+// reconnect SSE on main page to show notifications of new comments
+const ev = new EventSource('/events');
+ev.addEventListener('comment', (e)=>{
+  const d = JSON.parse(e.data);
+  // simple notification in console; you can extend to UI updates
+  console.log('New comment', d);
+  loadPosts(); // refresh counts
+});
+</script>
+</body>
+</html>`);
+});
+
+// --- start ---
+app.listen(PORT, () => console.log(`Blog single-file server running at http://localhost:${PORT}`));
