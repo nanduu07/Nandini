@@ -1,0 +1,183 @@
+// Single-file Todo app: backend + frontend in one file
+// Save this as `server.js`. Run: `npm init -y && npm install express` then `node server.js`.
+
+const express = require('express');
+const fs = require('fs').promises;
+const path = require('path');
+
+const DATA_FILE = path.join(__dirname, 'todos.json');
+const PORT = process.env.PORT || 5000;
+
+const app = express();
+app.use(express.json()); // parse JSON bodies
+
+// --- Simple file-backed storage helpers ---
+async function readTodos() {
+  try {
+    const txt = await fs.readFile(DATA_FILE, 'utf8');
+    return JSON.parse(txt || '[]');
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+async function writeTodos(todos) {
+  await fs.writeFile(DATA_FILE, JSON.stringify(todos, null, 2), 'utf8');
+}
+
+function makeId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+}
+
+// --- API (CRUD) ---
+app.get('/api/todos', async (req, res) => {
+  const todos = await readTodos();
+  res.json(todos);
+});
+
+app.post('/api/todos', async (req, res) => {
+  const { text } = req.body;
+  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
+  const todos = await readTodos();
+  const todo = { id: makeId(), text: text.trim(), completed: false, createdAt: new Date().toISOString() };
+  todos.unshift(todo);
+  await writeTodos(todos);
+  res.status(201).json(todo);
+});
+
+app.put('/api/todos/:id', async (req, res) => {
+  const id = req.params.id;
+  const { text, completed } = req.body;
+  const todos = await readTodos();
+  const i = todos.findIndex(t => t.id === id);
+  if (i === -1) return res.status(404).json({ error: 'Not found' });
+  if (typeof text === 'string') todos[i].text = text.trim();
+  if (typeof completed === 'boolean') todos[i].completed = completed;
+  todos[i].updatedAt = new Date().toISOString();
+  await writeTodos(todos);
+  res.json(todos[i]);
+});
+
+app.delete('/api/todos/:id', async (req, res) => {
+  const id = req.params.id;
+  let todos = await readTodos();
+  const before = todos.length;
+  todos = todos.filter(t => t.id !== id);
+  if (todos.length === before) return res.status(404).json({ error: 'Not found' });
+  await writeTodos(todos);
+  res.json({ success: true });
+});
+
+// --- Single-page frontend served from the same file ---
+app.get('/', (req, res) => {
+  res.type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Single-file Todo App</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;padding:20px;background:#f7fafc}
+  .container{max-width:700px;margin:0 auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.08)}
+  h1{margin:0 0 12px}
+  form{display:flex;gap:8px}
+  input[type=text]{flex:1;padding:10px;border:1px solid #ddd;border-radius:6px}
+  button{padding:10px 14px;border-radius:6px;border:none;background:#3b82f6;color:#fff;cursor:pointer}
+  ul{list-style:none;padding:0;margin:16px 0}
+  li{display:flex;align-items:center;justify-content:space-between;padding:10px;border-bottom:1px solid #f0f0f0}
+  .left{display:flex;gap:12px;align-items:center}
+  .text{cursor:pointer}
+  .text.completed{text-decoration:line-through;color:#6b7280}
+  .smallbtn{background:#ef4444}
+  footer{font-size:13px;color:#64748b;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Todo App (single file)</h1>
+  <form id="form">
+    <input id="text" type="text" placeholder="Add a todo..." autocomplete="off" />
+    <button type="submit">Add</button>
+  </form>
+  <ul id="list"></ul>
+  <footer>Click a todo to toggle complete. Edit text inline. Data stored in <code>todos.json</code>.</footer>
+</div>
+<script>
+const api = url => fetch(url).then(r=>r.json());
+const qs = s => document.querySelector(s);
+
+async function load() {
+  const todos = await api('/api/todos');
+  const list = qs('#list');
+  list.innerHTML = '';
+  todos.forEach(t => {
+    const li = document.createElement('li');
+    const left = document.createElement('div'); left.className='left';
+    const txt = document.createElement('span');
+    txt.className = 'text' + (t.completed? ' completed':'');
+    txt.textContent = t.text;
+    txt.title = 'Click to toggle completed. Double-click to edit.';
+    txt.addEventListener('click', async ()=>{
+      await fetch('/api/todos/' + t.id, {method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({completed:!t.completed})});
+      load();
+    });
+    txt.addEventListener('dblclick', ()=> startEdit(t, txt));
+
+    left.appendChild(txt);
+    li.appendChild(left);
+
+    const right = document.createElement('div');
+    const del = document.createElement('button');
+    del.textContent = 'Delete'; del.className='smallbtn';
+    del.addEventListener('click', async ()=>{
+      if (!confirm('Delete this todo?')) return;
+      await fetch('/api/todos/' + t.id, {method:'DELETE'});
+      load();
+    });
+    right.appendChild(del);
+    li.appendChild(right);
+
+    list.appendChild(li);
+  });
+}
+
+async function startEdit(todo, span) {
+  const input = document.createElement('input');
+  input.type = 'text'; input.value = todo.text; input.style.minWidth = '200px';
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  function finish(save){
+    if (save){
+      fetch('/api/todos/' + todo.id, {method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({text: input.value})}).then(()=>load());
+    } else load();
+  }
+  input.addEventListener('blur', ()=> finish(true));
+  input.addEventListener('keydown', (e)=>{
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  });
+}
+
+qs('#form').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const t = qs('#text');
+  const text = t.value.trim();
+  if (!text) return;
+  await fetch('/api/todos', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})});
+  t.value='';
+  load();
+});
+
+// initial load
+load();
+</script>
+</body>
+</html>`);
+});
+
+// --- start server ---
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT} — single-file todo app`);
+});
